@@ -3,21 +3,30 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
+	"example.com/go-sql/internal/storage"
 	_ "modernc.org/sqlite"
 )
 
-type User struct {
-	ID    int64  `json:"id"`
-	Email string `json:"email"`
-	Name  string `json:"name"`
+var menuVariants = []string{
+	" 1. Создать курс;",
+	" 2. Посмотреть все курсы;",
+	" 3. Посмотреть курсы по ids;",
+	" 4. Выход",
+	"выберите вариант",
+}
+
+var menu = map[string]func(*sql.DB, context.Context){
+	"1": createCourse,
+	"2": listCourses,
+	"3": listCoursesByIDs,
 }
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	db, err := sql.Open("sqlite", "file:data.db?_foreign_keys=on&_busy_timeout=5000")
@@ -29,28 +38,92 @@ func main() {
 	if err := db.PingContext(ctx); err != nil {
 		log.Fatalf("ping db: %v", err)
 	}
+Menu:
+	for {
+		fmt.Println("-- Меню работы с курсами --")
+		variant := promptData(menuVariants...)
+		menuFunc := menu[variant]
+		if menuFunc == nil {
+			break Menu
+		}
+		menuFunc(db, ctx)
+	}
+}
 
-	const schema = `CREATE TABLE IF NOT EXISTS users( id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE, name TEXT );`
+func promptData(prompt ...string) string {
+	for i, line := range prompt {
+		if i == len(prompt)-1 {
+			fmt.Printf("%v:", line)
+		} else {
+			fmt.Println(line)
+		}
+	}
+	var info string
+	fmt.Scanln(&info)
+	return info
+}
 
-	if _, err = db.ExecContext(ctx, schema); err != nil {
-		log.Fatalf("create table: %v", err)
+func createCourse(db *sql.DB, ctx context.Context) {
+	fmt.Print("Введите слоган: ")
+	var slug string
+	if _, err := fmt.Scanln(&slug); err != nil {
+		log.Fatalf("input_slug: %v", err)
+	}
+	fmt.Print("Введите титул: ")
+	var title string
+	if _, err := fmt.Scanln(&title); err != nil {
+		log.Fatalf("input_title: %v", err)
+	}
+	fmt.Print("Введите цену: ")
+	var price int
+	if _, err := fmt.Scanln(&price); err != nil {
+		log.Fatalf("input_price: %v", err)
 	}
 
-	const insert = `INSERT INTO users(email, name) VALUES(?, ?) ON CONFLICT(email) DO NOTHING;`
-
-	if _, err := db.ExecContext(ctx, insert, "1234@example.com", "Demo User"); err != nil {
-		log.Fatalf("insert user: %v", err)
-	}
-
-	var u User
-
-	err = db.QueryRowContext(ctx,
-		`SELECT id, email, name FROM users WHERE email=?`,
-		"1234@example.com").Scan(&u.ID, &u.Email, &u.Name)
+	id, err := storage.CreateCourse(ctx, db, slug, title, price)
 	if err != nil {
-		log.Fatalf("select user: %v", err)
+		log.Fatalf("create_course: %v", err)
+	}
+	fmt.Printf("course_id = %v\n", id)
+}
+
+func listCourses(db *sql.DB, ctx context.Context) {
+	fmt.Print("Введите вариант сортировки, напимер id_asc: ")
+	var sort string
+	if _, err := fmt.Scanln(&sort); err != nil {
+		log.Fatalf("input_userSort: %v", err)
+	}
+	courses, err := storage.ListCourses(ctx, db, sort)
+	if err != nil {
+		log.Printf("list_courses %v", err)
+	}
+	printCourses(courses)
+}
+
+func listCoursesByIDs(db *sql.DB, ctx context.Context) {
+	var id int
+	ids := make([]int, 0, 5)
+Menu:
+	for {
+		fmt.Print("Введите ID: ")
+		if _, err := fmt.Scan(&id); err != nil {
+			log.Fatalf("input_ids: %v", err)
+		}
+		ids = append(ids, id)
+		if id == 0 {
+			break Menu
+		}
 	}
 
-	payload, _ := json.MarshalIndent(u, "", " ")
-	log.Printf("loaded users: %s", payload)
+	courses, err := storage.FindCoursesByIDs(ctx, db, ids...)
+	if err != nil {
+		log.Printf("list_courses %v", err)
+	}
+	printCourses(courses)
+}
+
+func printCourses(courses []storage.Course) {
+	for _, course := range courses {
+		fmt.Printf("course_id = %v\n course_slug = %v\n course_title = %v\n price = %v\n", course.ID, course.Slug, course.Title, course.Price)
+	}
 }
