@@ -3,27 +3,16 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"example.com/go-sql/internal/storage"
 	_ "modernc.org/sqlite"
 )
-
-var menuVariants = []string{
-	" 1. Создать курс;",
-	" 2. Посмотреть все курсы;",
-	" 3. Посмотреть курсы по ids;",
-	" 4. Выход",
-	"выберите вариант",
-}
-
-var menu = map[string]func(*sql.DB, context.Context){
-	"1": createCourse,
-	"2": listCourses,
-	"3": listCoursesByIDs,
-}
 
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -38,92 +27,61 @@ func main() {
 	if err := db.PingContext(ctx); err != nil {
 		log.Fatalf("ping db: %v", err)
 	}
-Menu:
-	for {
-		fmt.Println("-- Меню работы с курсами --")
-		variant := promptData(menuVariants...)
-		menuFunc := menu[variant]
-		if menuFunc == nil {
-			break Menu
-		}
-		menuFunc(db, ctx)
+
+	// create/update/get/list/delete
+	crud := flag.String("crud", "get", "defines an operation with DB")
+
+	id := flag.Int("id", 1, "receives id")
+
+	email := flag.String("email", "example@yandex.ru", "")
+	name := flag.String("name", "Vasia", "")
+	age := flag.Int("age", 30, "")
+
+	flag.Parse()
+
+	if *crud == "get" {
+		getUser(ctx, db, int64(*id))
+	} else if *crud == "create" {
+		createUser(ctx, db, *email, *name, int64(*age))
+	} else {
+		fmt.Println("smth else")
 	}
 }
 
-func promptData(prompt ...string) string {
-	for i, line := range prompt {
-		if i == len(prompt)-1 {
-			fmt.Printf("%v:", line)
-		} else {
-			fmt.Println(line)
-		}
+func createUser(ctx context.Context, db *sql.DB, email, name string, age int64) {
+	dto := storage.CreateUserDTO{
+		Email: email,
+		Name: sql.NullString{
+			String: name,
+			Valid:  true,
+		},
+		Age: sql.NullInt64{
+			Int64: age,
+			Valid: true,
+		},
 	}
-	var info string
-	fmt.Scanln(&info)
-	return info
-}
+	u := storage.User{}
 
-func createCourse(db *sql.DB, ctx context.Context) {
-	fmt.Print("Введите слоган: ")
-	var slug string
-	if _, err := fmt.Scanln(&slug); err != nil {
-		log.Fatalf("input_slug: %v", err)
-	}
-	fmt.Print("Введите титул: ")
-	var title string
-	if _, err := fmt.Scanln(&title); err != nil {
-		log.Fatalf("input_title: %v", err)
-	}
-	fmt.Print("Введите цену: ")
-	var price int
-	if _, err := fmt.Scanln(&price); err != nil {
-		log.Fatalf("input_price: %v", err)
-	}
-
-	id, err := storage.CreateCourse(ctx, db, slug, title, price)
+	u, err := storage.CreateUser(ctx, db, dto)
 	if err != nil {
-		log.Fatalf("create_course: %v", err)
+		os.Stderr.WriteString(err.Error())
 	}
-	fmt.Printf("course_id = %v\n", id)
-}
-
-func listCourses(db *sql.DB, ctx context.Context) {
-	fmt.Print("Введите вариант сортировки, напимер id_asc: ")
-	var sort string
-	if _, err := fmt.Scanln(&sort); err != nil {
-		log.Fatalf("input_userSort: %v", err)
-	}
-	courses, err := storage.ListCourses(ctx, db, sort)
+	res, err := json.MarshalIndent(u, "", "")
 	if err != nil {
-		log.Printf("list_courses %v", err)
+		os.Stderr.WriteString(err.Error())
 	}
-	printCourses(courses)
+	fmt.Println(string(res))
 }
 
-func listCoursesByIDs(db *sql.DB, ctx context.Context) {
-	var id int
-	ids := make([]int, 0, 5)
-Menu:
-	for {
-		fmt.Print("Введите ID: ")
-		if _, err := fmt.Scan(&id); err != nil {
-			log.Fatalf("input_ids: %v", err)
-		}
-		ids = append(ids, id)
-		if id == 0 {
-			break Menu
-		}
-	}
-
-	courses, err := storage.FindCoursesByIDs(ctx, db, ids...)
+func getUser(ctx context.Context, db *sql.DB, id int64) {
+	u := storage.User{}
+	u, err := storage.GetUser(ctx, db, id)
 	if err != nil {
-		log.Printf("list_courses %v", err)
+		os.Stderr.WriteString(err.Error())
 	}
-	printCourses(courses)
-}
-
-func printCourses(courses []storage.Course) {
-	for _, course := range courses {
-		fmt.Printf("course_id = %v\n course_slug = %v\n course_title = %v\n price = %v\n", course.ID, course.Slug, course.Title, course.Price)
+	out, err := json.MarshalIndent(u, "", "")
+	if err != nil {
+		os.Stderr.WriteString(err.Error())
 	}
+	fmt.Println(string(out))
 }
